@@ -31,30 +31,133 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // Query organization project ID
-            const query = `
+            const org = 'oceanbase';
+            const projectNumber = 27;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            // First, try to find organization-level project
+            console.log(`Attempting to find organization project ${projectNumber} in ${org}...`);
+            const orgQuery = `
               query($org: String!, $number: Int!) {
                 organization(login: $org) {
                   projectV2(number: $number) {
                     id
                     title
+                    number
                   }
                 }
               }
             `;
             
-            const result = await github.graphql(query, {
-              org: 'oceanbase',
-              number: 27
-            });
-            
-            if (result.organization && result.organization.projectV2) {
-              console.log('Found project:', result.organization.projectV2.title);
-              console.log('Project ID:', result.organization.projectV2.id);
-              core.setOutput('project_id', result.organization.projectV2.id);
-            } else {
-              throw new Error('Project not found');
+            try {
+              const orgResult = await github.graphql(orgQuery, {
+                org: org,
+                number: projectNumber
+              });
+              
+              if (orgResult.organization && orgResult.organization.projectV2) {
+                console.log('✓ Found organization project:', orgResult.organization.projectV2.title);
+                console.log('  Project Number:', orgResult.organization.projectV2.number);
+                console.log('  Project ID:', orgResult.organization.projectV2.id);
+                core.setOutput('project_id', orgResult.organization.projectV2.id);
+                return;
+              }
+            } catch (orgError) {
+              console.log('Organization project not found, trying repository-level project...');
+              console.log('Error:', orgError.message);
             }
+            
+            // If organization project not found, try repository-level project
+            console.log(`Attempting to find repository project ${projectNumber} in ${owner}/${repo}...`);
+            const repoQuery = `
+              query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  projectV2(number: $number) {
+                    id
+                    title
+                    number
+                  }
+                }
+              }
+            `;
+            
+            try {
+              const repoResult = await github.graphql(repoQuery, {
+                owner: owner,
+                repo: repo,
+                number: projectNumber
+              });
+              
+              if (repoResult.repository && repoResult.repository.projectV2) {
+                console.log('✓ Found repository project:', repoResult.repository.projectV2.title);
+                console.log('  Project Number:', repoResult.repository.projectV2.number);
+                console.log('  Project ID:', repoResult.repository.projectV2.id);
+                core.setOutput('project_id', repoResult.repository.projectV2.id);
+                return;
+              }
+            } catch (repoError) {
+              console.log('Repository project not found.');
+              console.log('Error:', repoError.message);
+            }
+            
+            // If both failed, list available projects for debugging
+            console.log('\n=== Listing available organization projects ===');
+            try {
+              const listOrgQuery = `
+                query($org: String!) {
+                  organization(login: $org) {
+                    projectsV2(first: 20) {
+                      nodes {
+                        id
+                        title
+                        number
+                      }
+                    }
+                  }
+                }
+              `;
+              const listOrgResult = await github.graphql(listOrgQuery, { org: org });
+              if (listOrgResult.organization && listOrgResult.organization.projectsV2) {
+                console.log('Available organization projects:');
+                listOrgResult.organization.projectsV2.nodes.forEach(project => {
+                  console.log(`  - #${project.number}: ${project.title} (ID: ${project.id})`);
+                });
+              }
+            } catch (e) {
+              console.log('Could not list organization projects:', e.message);
+            }
+            
+            console.log(`\n=== Listing available repository projects for ${owner}/${repo} ===`);
+            try {
+              const listRepoQuery = `
+                query($owner: String!, $repo: String!) {
+                  repository(owner: $owner, name: $repo) {
+                    projectsV2(first: 20) {
+                      nodes {
+                        id
+                        title
+                        number
+                      }
+                    }
+                  }
+                }
+              `;
+              const listRepoResult = await github.graphql(listRepoQuery, {
+                owner: owner,
+                repo: repo
+              });
+              if (listRepoResult.repository && listRepoResult.repository.projectsV2) {
+                console.log('Available repository projects:');
+                listRepoResult.repository.projectsV2.nodes.forEach(project => {
+                  console.log(`  - #${project.number}: ${project.title} (ID: ${project.id})`);
+                });
+              }
+            } catch (e) {
+              console.log('Could not list repository projects:', e.message);
+            }
+            
+            throw new Error(`Project #${projectNumber} not found in organization '${org}' or repository '${owner}/${repo}'. Please check the project number and ensure the workflow has proper permissions.`);
 
   add-to-project:
     runs-on: ubuntu-latest
